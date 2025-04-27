@@ -1,6 +1,8 @@
 // wasm/src/lib.rs
 use wasm_bindgen::prelude::*;
 use core as apartment_core;    // assumes your core crate’s Cargo.toml name is “core”
+use js_sys::{Array, Object as JsObject, Reflect};
+use wasm_bindgen::JsValue;
 
 #[wasm_bindgen]
 pub struct ApartmentLayout {
@@ -35,7 +37,8 @@ pub fn generate(seed: u64, max_rooms: usize) -> ApartmentLayout {
     let opts = apartment_core::GenOpts { seed, max_rooms };
 
     // Call into your core crate
-    let core::Layout { width, height, cells } = apartment_core::generate(&opts);
+    let world = apartment_core::generate(&opts);
+    let core::Layout { width, height, cells } = world.layout;
 
     // Wrap it up for JS
     ApartmentLayout { width, height, cells }
@@ -112,20 +115,67 @@ impl ApartmentSimulator {
     /// Convenience: open door right
     #[wasm_bindgen]
     pub fn open_right(&mut self) -> Result<(), JsValue> { self.interact(1, 0) }
+    
+    /// Pick up a pickable object at the agent's location
+    #[wasm_bindgen]
+    pub fn pick_up(&mut self) -> Result<(), JsValue> {
+        self.sim.pick_up().map_err(|e| JsValue::from_str(&format!("{:?}", e)))
+    }
+    /// Drop held object at the agent's location
+    #[wasm_bindgen]
+    pub fn drop(&mut self) -> Result<(), JsValue> {
+        self.sim.drop().map_err(|e| JsValue::from_str(&format!("{:?}", e)))
+    }
+
+    /// Retrieve all objects in the world
+    #[wasm_bindgen]
+    pub fn get_objects(&self) -> Array {
+        let arr = Array::new();
+        // collect IDs of objects contained in containers
+        use std::collections::HashSet;
+        let mut contained: HashSet<u32> = HashSet::new();
+        for c in self.sim.world.objects.iter() {
+            for &cid in c.contents.iter() {
+                contained.insert(cid as u32);
+            }
+        }
+        for o in self.sim.world.objects.iter() {
+            // skip objects inside containers
+            if contained.contains(&(o.id as u32)) {
+                continue;
+            }
+            let obj = JsObject::new();
+            // set type string
+            let type_str = match &o.typ {
+                apartment_core::ObjectType::Wardrobe { .. } => "Wardrobe",
+                apartment_core::ObjectType::Cupboard { .. } => "Cupboard",
+                apartment_core::ObjectType::Banana => "Banana",
+                apartment_core::ObjectType::Couch => "Couch",
+                _ => "Unknown",
+            };
+            Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(o.id as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(o.x as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("y"), &JsValue::from_f64(o.y as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(o.pickable)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_str)).unwrap();
+            arr.push(&obj);
+        }
+        arr
+    }
 
     /// Layout width
     #[wasm_bindgen(getter)]
     pub fn width(&self) -> usize {
-        self.sim.layout.width
+        self.sim.world.layout.width
     }
     /// Layout height
     #[wasm_bindgen(getter)]
     pub fn height(&self) -> usize {
-        self.sim.layout.height
+        self.sim.world.layout.height
     }
     /// Flat cells array
     #[wasm_bindgen(getter)]
     pub fn cells(&self) -> Vec<i8> {
-        self.sim.layout.cells.clone()
+        self.sim.world.layout.cells.clone()
     }
 }

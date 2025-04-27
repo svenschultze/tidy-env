@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted, nextTick, onBeforeUnmount } from 'vue';
+import { ref, watch, onMounted, nextTick, onBeforeUnmount, computed } from 'vue';
 import initWasm, { generate, ApartmentSimulator } from './pkg/wasm.js';
 // simulator instance
 const sim = ref(null);
@@ -28,6 +28,26 @@ function colorFor(v) {
   }
   return roomColors[v];
 }
+
+// map object types to colors
+const objectColors = {
+  Wardrobe: '#795548',
+  Cupboard: '#8D6E63',
+  Banana: '#FFEB3B',
+  Couch: '#4CAF50',
+  Unknown: '#888',
+};
+
+// compute unique types for legend
+const legendItems = computed(() => {
+  if (!sim.value) return [];
+  const types = new Set();
+  try {
+    const objs = sim.value.get_objects();
+    for (const o of objs) types.add(o.type);
+  } catch {}
+  return Array.from(types);
+});
 
 // initialize simulator and first render
 async function initSim() {
@@ -74,6 +94,26 @@ function drawWorld() {
     );
   }
 
+  // draw objects (before agent)
+  try {
+    const objs = sim.value.get_objects();
+    console.log(objs);
+    for (const o of objs) {
+      const color = objectColors[o.type] || (o.pickable ? '#FFEB3B' : '#888');
+      ctx.fillStyle = color;
+      const ox = o.x, oy = o.y;
+      const size = scale * 0.6;
+      ctx.fillRect(
+        margin + ox*scale + (scale - size)/2,
+        margin + oy*scale + (scale - size)/2,
+        size,
+        size
+      );
+    }
+  } catch (err) {
+    console.error('Error drawing objects', err);
+  }
+
   // draw agent
   ctx.fillStyle = '#f00';
   const ax = sim.value.agent_x;
@@ -98,11 +138,13 @@ function handleKey(e) {
     else if (e.key === 'ArrowDown') sim.value.down();
     else if (e.key === 'ArrowLeft') sim.value.left();
     else if (e.key === 'ArrowRight') sim.value.right();
-    // door opening with WASD
-    else if (e.key === 'w') sim.value.open_up();
-    else if (e.key === 's') sim.value.open_down();
-    else if (e.key === 'a') sim.value.open_left();
-    else if (e.key === 'd') sim.value.open_right();
+    // door and object interaction in directions
+    else if (e.key === 'w') sim.value.interact(0, -1);
+    else if (e.key === 's') sim.value.interact(0, 1);
+    else if (e.key === 'a') sim.value.interact(-1, 0);
+    else if (e.key === 'd') sim.value.interact(1, 0);
+    // object interaction: pick up or drop/place via unified interact
+    else if (e.key === 'e' || e.key === 'q') sim.value.interact(0, 0);
     else return;
     drawWorld();
   } catch (err) {
@@ -121,23 +163,59 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKey));
 </script>
 
 <template>
-  <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.7); color:#fff; padding:12px; border-radius:6px;">
-    <div>
-      <label>Seed:
-        <input type="number" v-model="seed" style="width:80px"/>
-      </label>
-    </div>
-    <div style="margin-top:4px">
-      <label>Rooms:
-        <input type="number" min="1" max="12" v-model="maxRooms" style="width:50px"/>
-      </label>
-    </div>
-    <button style="margin-top:8px" @click="initSim">Regenerate</button>
-  </div>
+  <div style="display:flex;">
 
-  <canvas ref="canvasRef" style="display:block; background:#ddd; margin-top:0"></canvas>
+    <canvas ref="canvasRef"/>
+    <div id="legend">
+      <div>
+        <h2>Legend</h2>
+        <div>
+          <!-- control explanation -->
+           <p>
+            <strong>Arrow keys:</strong> Move
+            <br/>
+            <strong>WASD:</strong> Interact with doors and objects
+          </p>
+        </div>
+        <div v-for="type in legendItems" :key="type" style="display:flex; align-items:center; margin-bottom:4px;">
+          <div :style="{width:'16px',height:'16px',backgroundColor: objectColors[type] || '#888', marginRight:'8px'}"></div>
+          <span>{{ type }}</span>
+        </div>
+      </div>
+      
+      <div>
+        <div>
+          <label>Seed:
+            <input type="number" v-model="seed" style="width:80px"/>
+          </label>
+        </div>
+        <div style="margin-top:4px">
+          <label>Rooms:
+            <input type="number" min="1" max="12" v-model="maxRooms" style="width:50px"/>
+          </label>
+        </div>
+        <button style="margin-top:8px" @click="initSim">Regenerate</button>
+      </div>
+    </div>
+  </div>
 </template>
 
-<style>
-html, body, #app { margin:0; padding:0; }
+<style scoped>
+canvas {
+  flex: 1;
+}
+#legend {
+  background:rgba(0,0,0,0.7);
+  color:#fff;
+  padding:12px;
+  border-radius:6px;
+  margin-left:12px;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+}
+h2, h3 {
+  margin-top: 0;
+  margin-bottom: 4px;
+}
 </style>

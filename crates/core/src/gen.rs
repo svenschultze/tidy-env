@@ -3,6 +3,7 @@ use rand::seq::IteratorRandom;
 use rand::rngs::StdRng;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use crate::object::{Object, ObjectSchema};
 use crate::{
     OUTSIDE, WALL, CLOSED_DOOR
 };
@@ -362,7 +363,47 @@ fn carve_doors(labels: &[Cell], wall_mask: &mut [bool], shell: &[bool], seed: u6
     door_mask
 }
 
-pub fn generate(opts: &GenOpts) -> Layout {
+/// Simulation world bundling layout and objects
+#[derive(Debug)]
+pub struct World {
+    pub layout: Layout,
+    pub objects: Vec<Object>,
+}
+
+/// Place objects randomly according to schemas
+fn place_objects(layout: &Layout, schemas: &[ObjectSchema], seed: u64) -> Vec<Object> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    use rand::seq::{SliceRandom, IteratorRandom};
+    let mut objects = Vec::new();
+    let mut id = 0;
+    // collect free cells
+    let mut free_cells: Vec<(usize, usize)> = (0..layout.height).flat_map(|y| {
+        (0..layout.width).filter_map(move |x| {
+            let idx = y * layout.width + x;
+            if layout.cells[idx] >= 0 { Some((x, y)) } else { None }
+        })
+    }).collect();
+    free_cells.shuffle(&mut rng);
+    for schema in schemas {
+        let candidates: Vec<_> = free_cells.iter().cloned()
+            .filter(|&(x, y)| (schema.constraint)(layout, x, y))
+            .collect();
+        if let Some(&(x, y)) = candidates.iter().choose(&mut rng) {
+            objects.push(Object {
+                id,
+                typ: schema.typ.clone(),
+                x,
+                y,
+                contents: Vec::new(),
+                pickable: schema.pickable,
+            });
+            id += 1;
+        }
+    }
+    objects
+}
+
+pub fn generate(opts: &GenOpts) -> World {
     let shell = make_concave_shell(opts.seed);
     let (regions, mut wall_mask) = bsp_with_walls(&shell, opts.max_rooms, opts.seed);
     let labels = build_labels(&regions);
@@ -379,5 +420,7 @@ pub fn generate(opts: &GenOpts) -> Layout {
             cells.push(labels[i]);
         }
     }
-    Layout::new(W, H, cells)
+    let layout = Layout::new(W, H, cells);
+    let objects = place_objects(&layout, &ObjectSchema::default_schemas(), opts.seed);
+    World { layout, objects }
 }
