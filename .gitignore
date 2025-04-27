@@ -1,0 +1,39 @@
+# === Rust ===
+/target/
+**/target/
+**/*.rs.bk
+
+# Cargo
+Cargo.lock
+
+# === WASM (wasm-pack build) ===
+/crates/wasm/pkg/
+/crates/wasm/pkg-lock.json
+
+# === Node / Vue demo ===
+/examples/vue_viewer/node_modules/
+/examples/vue_viewer/dist/
+/examples/vue_viewer/*.local
+/examples/vue_viewer/.env*
+
+# === Python / PyO3 (maturin) ===
+/crates/ffi_py/target/
+/crates/ffi_py/ffi_py.egg-info/
+/crates/ffi_py/build/
+/crates/ffi_py/.maturin/
+**/__pycache__/
+**/*.py[cod]
+**/__pyo3__/
+
+# === IDE / Editor ===
+.vscode/
+.idea/
+/*.sublime-workspace
+/*.sublime-project
+
+# === OS artifacts ===
+.DS_Store
+Thumbs.db
+
+# === Logs and misc ===
+*.log
