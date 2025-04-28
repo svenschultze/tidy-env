@@ -1,5 +1,6 @@
+use crate::gen::World;
+use crate::object::{Object, ObjectId};
 use crate::agent::Agent;
-use crate::{World, Object, ObjectId};
 
 /// Constants for door types
 use crate::{
@@ -98,10 +99,9 @@ impl Simulator {
 
     /// Unified interact: doors and objects both handled at target cell
     pub fn interact(&mut self, dx: isize, dy: isize) -> Result<(), String> {
-        // target coordinates
+        // compute target coordinates and bounds
         let tx_i = self.agent.x as isize + dx;
         let ty_i = self.agent.y as isize + dy;
-        // bounds check
         if tx_i < 0 || tx_i >= self.world.layout.width as isize || ty_i < 0 || ty_i >= self.world.layout.height as isize {
             return Err(format!("Out of bounds: ({}, {})", tx_i, ty_i));
         }
@@ -118,33 +118,36 @@ impl Simulator {
             self.use_door(tx_i, ty_i, false)?;
             return Ok(());
         }
-        // only allow object interactions on room cells (>=0)
+        // only on room cells
         if cell_value < 0 {
             return Err(format!("Cannot interact with objects on non-room cell: {}", cell_value));
         }
-        // object interaction at target
-        if self.holding.is_none() {
-            // pick up if pickable present
-            if let Some(pos) = self.world.objects.iter().position(|o| o.x == tx && o.y == ty && o.pickable) {
-                let obj = self.world.objects.remove(pos);
-                self.holding = Some(obj);
+        // if holding, attempt container placement or drop
+        if self.holding.is_some() {
+            // place into container if present
+            if let Some(container) = self.world.objects.iter().find(|o| o.x == tx && o.y == ty) {
+                self.place_into(container.id).map_err(|e| format!("{:?}", e))?;
                 return Ok(());
             }
-            return Err("Nothing to interact with".into());
-        } else {
-            // try placing into container at target
-            if let Some(container) = self.world.objects.iter().find(|o| o.x == tx && o.y == ty) {
-                if self.place_into(container.id).is_ok() {
-                    return Ok(());
-                }
-            }
-            // drop at target
+            // else drop on floor
             let mut obj = self.holding.take().unwrap();
             obj.x = tx;
             obj.y = ty;
             self.world.objects.push(obj);
             return Ok(());
         }
+        // not holding: pick up pickable at target
+        if let Some(pos) = self.world.objects.iter().position(|o| o.x == tx && o.y == ty && o.pickable) {
+            let obj = self.world.objects.remove(pos);
+            // remove from any container contents
+            let oid = obj.id;
+            for container in self.world.objects.iter_mut() {
+                container.contents.retain(|&cid| cid != oid);
+            }
+            self.holding = Some(obj);
+            return Ok(());
+        }
+        Err("Nothing to interact with".into())
     }
 
     /// Use a door (open if `open_flag` is true, close otherwise)
@@ -217,12 +220,7 @@ impl Simulator {
         // find container
         if let Some(container) = self.world.objects.iter_mut().find(|o| o.id == target_id) {
             // determine capacity
-            let capacity = match container.typ {
-                crate::object::ObjectType::Wardrobe { capacity } => capacity,
-                crate::object::ObjectType::Cupboard { capacity } => capacity,
-                _ => return Err(MoveError::InvalidTarget),
-            };
-            if container.contents.len() >= capacity {
+            if container.contents.len() >= container.capacity {
                 return Err(MoveError::ContainerFull);
             }
             // place object

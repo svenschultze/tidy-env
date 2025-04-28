@@ -1,24 +1,28 @@
 <script setup>
 import { ref, watch, onMounted, nextTick, onBeforeUnmount, computed } from 'vue';
-import initWasm, { generate, ApartmentSimulator } from './pkg/wasm.js';
+import initWasm, { ApartmentSimulator } from './pkg/wasm.js';
+
 // simulator instance
 const sim = ref(null);
 // user-configurable parameters and canvas reference
 const seed = ref(0);
 const maxRooms = ref(4);
+const width = ref(30);
+const height = ref(20);
+const max_objects = ref(10);
 const canvasRef = ref(null);
-const scale = 10;
+const scale = 100;
 const margin = 2;
 
-// room color cache and helper
+// color cache for rooms
 const roomColors = {};
 function colorFor(v) {
   if (v < 0) {
     switch (v) {
       case -1: return '#fff'; // wall
       case -2: return '#000'; // outside
-      case -3: return '#ccc'; // closed door
-      case -4: return '#999'; // open door
+      case -3: return '#999'; // closed door
+      case -4: return '#ccc'; // open door
       default: return '#f00'; // unknown
     }
   }
@@ -29,85 +33,106 @@ function colorFor(v) {
   return roomColors[v];
 }
 
-// map object types to colors
-const objectColors = {
-  Wardrobe: '#795548',
-  Cupboard: '#8D6E63',
-  Banana: '#FFEB3B',
-  Couch: '#4CAF50',
-  Unknown: '#888',
-};
+// unique color per object instance
+const objectColors = {};
+function colorForObject(id) {
+  if (!(id in objectColors)) {
+    const hue = (id * 137) % 360; // spread hues
+    objectColors[id] = `hsl(${hue},60%,50%)`;
+  }
+  return objectColors[id];
+}
 
-// compute unique types for legend
+// trigger legend update after interactions
+const updateCount = ref(0);
+
+// compute objects for legend (instance-level)
 const legendItems = computed(() => {
+  updateCount.value;
   if (!sim.value) return [];
-  const types = new Set();
-  try {
-    const objs = sim.value.get_objects();
-    for (const o of objs) types.add(o.type);
-  } catch {}
-  return Array.from(types);
+  return sim.value.get_objects() || [];
 });
 
-// initialize simulator and first render
+// agent holding
+const holding = computed(() => {
+  updateCount.value;
+  if (!sim.value) return null;
+  const h = sim.value.get_holding();
+  return h || null;
+});
+
+// containers
+const containers = computed(() => {
+  updateCount.value;
+  if (!sim.value) return [];
+  return sim.value.get_objects().filter(o => o.capacity > 0);
+});
+
+// get contents of container
+function getContents(id) {
+  if (!sim.value) return [];
+  return sim.value.get_contents(id) || [];
+}
+
+// init and draw
 async function initSim() {
   await initWasm();
-  const layout = generate(BigInt(seed.value), maxRooms.value);
-  const freeIdx = layout.cells.findIndex(v => v >= 0);
-  const startX = freeIdx % layout.width;
-  const startY = Math.floor(freeIdx / layout.width);
-  sim.value = new ApartmentSimulator(BigInt(seed.value), maxRooms.value, startX, startY);
+  sim.value = new ApartmentSimulator(
+    BigInt(seed.value), maxRooms.value,
+    width.value, height.value,
+    max_objects.value,
+  );
   drawWorld();
 }
 
-// draw current simulation state
 function drawWorld() {
   if (!sim.value) return;
   const W = sim.value.width;
   const H = sim.value.height;
   const cells = sim.value.cells;
-
-  // resize canvas
   const canvas = canvasRef.value;
-  canvas.width  = W*scale + margin*2;
+  canvas.width = W*scale + margin*2;
   canvas.height = H*scale + margin*2;
   const ctx = canvas.getContext('2d');
 
-  // clear
+  // clear background
   ctx.fillStyle = '#ccc';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // reset room color cache
+  // reset room colors
   for (let k in roomColors) delete roomColors[k];
 
-  // draw each cell
+  // draw grid cells
   for (let i = 0; i < cells.length; i++) {
     const v = cells[i];
     const x = i % W;
     const y = Math.floor(i / W);
     ctx.fillStyle = colorFor(v);
-    ctx.fillRect(
-      margin + x*scale,
-      margin + y*scale,
-      scale,
-      scale
-    );
+    ctx.fillRect(margin + x*scale, margin + y*scale, scale, scale);
   }
 
-  // draw objects (before agent)
+  // draw objects
   try {
     const objs = sim.value.get_objects();
-    console.log(objs);
     for (const o of objs) {
-      const color = objectColors[o.type] || (o.pickable ? '#FFEB3B' : '#888');
-      ctx.fillStyle = color;
       const ox = o.x, oy = o.y;
       const size = scale * 0.6;
+      ctx.fillStyle = colorForObject(o.id);
       ctx.fillRect(
-        margin + ox*scale + (scale - size)/2,
-        margin + oy*scale + (scale - size)/2,
+        margin + ox*scale + (scale-size)/2,
+        margin + oy*scale + (scale-size)/2,
         size,
         size
+      );
+      // draw object ID number
+      ctx.fillStyle = '#000';
+      ctx.font = `${scale*0.5}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(
+        String(o.id),
+        margin + ox*scale + scale/2,
+        margin + oy*scale + scale/2
       );
     }
   } catch (err) {
@@ -129,32 +154,29 @@ function drawWorld() {
   ctx.fill();
 }
 
-// handle keyboard
+// keyboard handling
 function handleKey(e) {
   if (!sim.value) return;
-  try {
-    // movement
-    if (e.key === 'ArrowUp') sim.value.up();
-    else if (e.key === 'ArrowDown') sim.value.down();
-    else if (e.key === 'ArrowLeft') sim.value.left();
-    else if (e.key === 'ArrowRight') sim.value.right();
-    // door and object interaction in directions
-    else if (e.key === 'w') sim.value.interact(0, -1);
-    else if (e.key === 's') sim.value.interact(0, 1);
-    else if (e.key === 'a') sim.value.interact(-1, 0);
-    else if (e.key === 'd') sim.value.interact(1, 0);
-    // object interaction: pick up or drop/place via unified interact
-    else if (e.key === 'e' || e.key === 'q') sim.value.interact(0, 0);
-    else return;
-    drawWorld();
-  } catch (err) {
-    console.error(err);
-  }
+  const moves = {
+    ArrowUp: () => sim.value.up(),
+    ArrowDown: () => sim.value.down(),
+    ArrowLeft: () => sim.value.left(),
+    ArrowRight: () => sim.value.right(),
+  };
+  const interacts = {
+    w: () => sim.value.interact(0, -1),
+    s: () => sim.value.interact(0, 1),
+    a: () => sim.value.interact(-1, 0),
+    d: () => sim.value.interact(1, 0),
+  };
+  if (moves[e.key]) moves[e.key]();
+  else if (interacts[e.key]) interacts[e.key]();
+  else return;
+  drawWorld();
+  updateCount.value++;
 }
 
-watch([seed, maxRooms], () => {
-  nextTick().then(initSim);
-});
+watch([seed, maxRooms, width, height, max_objects], () => nextTick().then(initSim));
 onMounted(() => {
   nextTick().then(initSim);
   window.addEventListener('keydown', handleKey);
@@ -163,59 +185,119 @@ onBeforeUnmount(() => window.removeEventListener('keydown', handleKey));
 </script>
 
 <template>
-  <div style="display:flex;">
-
-    <canvas ref="canvasRef"/>
-    <div id="legend">
-      <div>
+  <div class="layout">
+    <div class="canvas-container">
+      <canvas ref="canvasRef" class="canvas" />
+    </div>
+     <div id="legend" class="legend">
+      <div class="legend-content">
         <h2>Legend</h2>
         <div>
-          <!-- control explanation -->
-           <p>
-            <strong>Arrow keys:</strong> Move
-            <br/>
-            <strong>WASD:</strong> Interact with doors and objects
+          <p>
+            <strong>Arrow keys:</strong> Move<br />
+            <strong>WASD:</strong> Interact
           </p>
         </div>
-        <div v-for="type in legendItems" :key="type" style="display:flex; align-items:center; margin-bottom:4px;">
-          <div :style="{width:'16px',height:'16px',backgroundColor: objectColors[type] || '#888', marginRight:'8px'}"></div>
-          <span>{{ type }}</span>
+        <!-- Object legend per instance -->
+        <div v-for="obj in legendItems" :key="obj.id" class="legend-item">
+          <div class="legend-color" :style="{ backgroundColor: colorForObject(obj.id) }" />
+          <span>{{ obj.id }}: {{ obj.name }}</span>
+        </div>
+
+        <div>
+          <h3>Agent Holding</h3>
+          <div v-if="holding" class="legend-item holding-item">
+            <div class="legend-color" :style="{ backgroundColor: colorForObject(holding.id) }" />
+            <span>{{ holding.name }}</span>
+          </div>
+          <div v-else><em>None</em></div>
+        </div>
+
+        <div>
+          <h3>Container Contents</h3>
+          <div v-for="c in containers" :key="c.id" class="container-item">
+            <div class="legend-item">
+              <div class="legend-color" :style="{ backgroundColor: colorForObject(c.id) }" />
+              <strong>{{ c.name }} {{ c.id }}:</strong>
+              <span v-if="getContents(c.id).length" class="container-contents">
+                <span v-for="o in getContents(c.id)" :key="o.id" class="container-object">
+                  {{ o.name }} ({{ o.id }})
+                </span>
+              </span>
+              <span v-else class="container-empty"><em>Empty</em></span>
+            </div>
+          </div>
         </div>
       </div>
-      
-      <div>
-        <div>
-          <label>Seed:
-            <input type="number" v-model="seed" style="width:80px"/>
-          </label>
+
+      <div class="controls">
+        <div class="control-row">
+          <label>Seed: <input type="number" v-model="seed" class="seed-input" /></label>
         </div>
-        <div style="margin-top:4px">
-          <label>Rooms:
-            <input type="number" min="1" max="12" v-model="maxRooms" style="width:50px"/>
-          </label>
+        <div class="control-row">
+          <label>Rooms: <input type="number" min="1" max="12" v-model="maxRooms" class="rooms-input" /></label>
         </div>
-        <button style="margin-top:8px" @click="initSim">Regenerate</button>
+        <div class="control-row">
+          <label>Width: <input type="number" min="10" max="50" v-model="width" class="size-input" /></label>
+        </div>
+        <div class="control-row">
+          <label>Height: <input type="number" min="10" max="50" v-model="height" class="size-input" /></label>
+        </div>
+        <div class="control-row">
+          <label>Max Objects: <input type="number" min="1" max="100" v-model="max_objects" class="size-input" /></label>
+        </div>
+        <button class="regenerate-button" @click="initSim">Regenerate</button>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-canvas {
+.layout {
+  display: flex;
+}
+
+.canvas-container {
   flex: 1;
+  image-rendering: pixelated;
 }
-#legend {
-  background:rgba(0,0,0,0.7);
-  color:#fff;
-  padding:12px;
-  border-radius:6px;
-  margin-left:12px;
-  display:flex;
-  flex-direction:column;
-  justify-content:space-between;
+.legend {
+  background: var(--legend-bg);
+  color: var(--legend-color);
+  padding: var(--legend-padding);
+  border-radius: var(--legend-radius);
+  margin-left: var(--legend-padding);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
 }
-h2, h3 {
-  margin-top: 0;
-  margin-bottom: 4px;
+.legend-item,
+.container-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--item-gap);
 }
+.legend-color {
+  width: var(--color-box-size);
+  height: var(--color-box-size);
+  margin-right: var(--double-gap);
+}
+.container-object {
+  margin-right: var(--item-gap);
+}
+.container-contents,
+.container-empty {
+  margin-left: var(--item-gap);
+}
+.controls {
+  margin-top: var(--control-gap);
+}
+.control-row + .control-row {
+  margin-top: var(--item-gap);
+}
+.seed-input { width: var(--seed-width); }
+.rooms-input,
+.size-input { width: var(--size-width); }
+.regenerate-button { margin-top: var(--control-gap); }
+h2, h3 { margin: 0 0 var(--item-gap); }
 </style>

@@ -1,18 +1,78 @@
+/* Variables and base styles */
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --legend-bg: rgba(0, 0, 0, 0.7);
+  --legend-color: #fff;
+  --legend-padding: 12px;
+  --legend-radius: 6px;
+  --item-gap: 4px;
+  --double-gap: 8px;
+  --color-box-size: 16px;
+  --control-gap: 8px;
+  --seed-width: 80px;
+  --size-width: 50px;
 }
 
+/* Global reset to fill viewport */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* App container occupies full viewport */
+#app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Layout: canvas + legend */
+.layout {
+  display: flex;
+  height: 100%;
+  flex: 1;
+}
+
+/* Canvas container: centers and crops overflow */
+.canvas-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* Canvas: preserve aspect ratio, scale down if needed */
+.canvas {
+  /* scale canvas to fit container without distortion */
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+/* Legend pane */
+.legend {
+  background: var(--legend-bg);
+  color: var(--legend-color);
+  padding: var(--legend-padding);
+  border-radius: var(--legend-radius);
+  margin-left: var(--legend-padding);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow-y: auto;
+  max-height: 100%;
+  min-width: 300px;
+}
+
+/* Text and UI elements */
 a {
   font-weight: 500;
   color: #646cff;
@@ -20,12 +80,6 @@ a {
 }
 a:hover {
   color: #535bf2;
-}
-
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
 }
 
 button {
@@ -47,16 +101,41 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-.card {
-  padding: 2em;
+.legend-item,
+.container-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: var(--item-gap);
+}
+.legend-color {
+  width: var(--color-box-size);
+  height: var(--color-box-size);
+  margin-right: var(--double-gap);
+}
+.container-object {
+  margin-right: var(--item-gap);
+}
+.container-contents,
+.container-empty {
+  margin-left: var(--item-gap);
 }
 
-#app {
-  margin: 0 auto;
-  padding: 2rem;
-  width: 100%;
+.controls {
+  margin-top: var(--control-gap);
+}
+.control-row + .control-row {
+  margin-top: var(--item-gap);
+}
+.seed-input { width: var(--seed-width); }
+.rooms-input,
+.size-input { width: var(--size-width); }
+.regenerate-button { margin-top: var(--control-gap); }
+
+h2, h3 {
+  margin: 0 0 var(--item-gap);
 }
 
+/* Light mode overrides */
 @media (prefers-color-scheme: light) {
   :root {
     color: #213547;

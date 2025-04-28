@@ -32,13 +32,13 @@ impl ApartmentLayout {
 }
 
 #[wasm_bindgen]
-pub fn generate(seed: u64, max_rooms: usize) -> ApartmentLayout {
-    // Build the core::GenOpts
-    let opts = apartment_core::GenOpts { seed, max_rooms };
+/// Generate a new layout with custom width/height
+pub fn generate(seed: u64, max_rooms: usize, width: usize, height: usize, max_objects: usize) -> ApartmentLayout {
+    let opts = apartment_core::GenOpts { seed, max_rooms, width, height, max_objects };
 
     // Call into your core crate
     let world = apartment_core::generate(&opts);
-    let core::Layout { width, height, cells } = world.layout;
+    let apartment_core::Layout { width, height, cells } = world.layout;
 
     // Wrap it up for JS
     ApartmentLayout { width, height, cells }
@@ -52,16 +52,24 @@ pub struct ApartmentSimulator {
 
 #[wasm_bindgen]
 impl ApartmentSimulator {
-    /// Create a new simulator with given seed, max_rooms, and start coordinates
     #[wasm_bindgen(constructor)]
-    pub fn new(seed: u64, max_rooms: usize, start_x: usize, start_y: usize) -> Result<ApartmentSimulator, JsValue> {
-        let opts = apartment_core::GenOpts { seed, max_rooms };
-        // generate layout
-        let layout = apartment_core::generate(&opts);
-        match apartment_core::Simulator::new(layout, start_x, start_y) {
-            Ok(sim) => Ok(ApartmentSimulator { sim }),
-            Err(e)  => Err(JsValue::from_str(e)),
+    /// Create a new simulator with custom width, height (agent start auto-selected)
+    pub fn new(seed: u64, max_rooms: usize, width: usize, height: usize, max_objects: usize) -> Result<ApartmentSimulator, JsValue> {
+        let opts = apartment_core::GenOpts { seed, max_rooms, width, height, max_objects };
+        let world = apartment_core::generate(&opts);
+        // auto-select first room cell
+        let mut start_x = 0;
+        let mut start_y = 0;
+        for (i, &cell) in world.layout.cells.iter().enumerate() {
+            if cell >= 0 {
+                start_x = i % world.layout.width;
+                start_y = i / world.layout.width;
+                break;
+            }
         }
+        apartment_core::Simulator::new(world, start_x, start_y)
+            .map(|sim| ApartmentSimulator { sim })
+            .map_err(|e| JsValue::from_str(e))
     }
 
     /// Current agent X coordinate
@@ -145,20 +153,45 @@ impl ApartmentSimulator {
                 continue;
             }
             let obj = JsObject::new();
-            // set type string
-            let type_str = match &o.typ {
-                apartment_core::ObjectType::Wardrobe { .. } => "Wardrobe",
-                apartment_core::ObjectType::Cupboard { .. } => "Cupboard",
-                apartment_core::ObjectType::Banana => "Banana",
-                apartment_core::ObjectType::Couch => "Couch",
-                _ => "Unknown",
-            };
             Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(o.id as f64)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(o.x as f64)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("y"), &JsValue::from_f64(o.y as f64)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(o.pickable)).unwrap();
-            Reflect::set(&obj, &JsValue::from_str("type"), &JsValue::from_str(type_str)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(o.name)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(o.capacity as f64)).unwrap();
             arr.push(&obj);
+        }
+        arr
+    }
+    /// Get the object currently held by the agent (or null)
+    #[wasm_bindgen]
+    pub fn get_holding(&self) -> JsValue {
+        if let Some(o) = &self.sim.holding {
+            let obj = JsObject::new();
+            Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(o.id as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(o.pickable)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(o.name)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(o.capacity as f64)).unwrap();
+            JsValue::from(obj)
+        } else {
+            JsValue::NULL
+        }
+    }
+    /// Get contents of a container object by ID
+    #[wasm_bindgen]
+    pub fn get_contents(&self, container_id: u32) -> Array {
+        let arr = Array::new();
+        // find container
+        if let Some(container) = self.sim.world.objects.iter().find(|o| o.id as u32 == container_id) {
+            for &cid in container.contents.iter() {
+                if let Some(inner) = self.sim.world.objects.iter().find(|o| o.id == cid) {
+                    let obj = JsObject::new();
+                    Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(inner.id as f64)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(inner.name)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(inner.capacity as f64)).unwrap();
+                    arr.push(&obj);
+                }
+            }
         }
         arr
     }
