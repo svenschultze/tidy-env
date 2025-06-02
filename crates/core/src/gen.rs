@@ -1,9 +1,10 @@
 use rand::{Rng, SeedableRng};
-use rand::seq::IteratorRandom;
+use rand::seq::{IteratorRandom, SliceRandom};
 use rand::rngs::StdRng;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::object::{Object, ObjectSchema, ObjectConstraint};
+use crate::object::{Object, ObjectSchema};
+
 use crate::{
     OUTSIDE, WALL, CLOSED_DOOR
 };
@@ -24,11 +25,17 @@ pub struct Layout {
     pub width: usize,
     pub height: usize,
     pub cells: Vec<Cell>,
+    pub room_names: Vec<&'static str>,
 }
 
 impl Layout {
-    pub fn new(width: usize, height: usize, cells: Vec<Cell>) -> Self {
-        Self { width, height, cells }
+    pub fn new(
+        width: usize,
+        height: usize,
+        cells: Vec<Cell>,
+        room_names: Vec<&'static str>,
+    ) -> Self {
+        Self { width, height, cells, room_names }
     }
 }
 
@@ -370,154 +377,108 @@ pub struct World {
     pub objects: Vec<Object>,
 }
 
-/// Randomly place objects according to schemas
-fn place_objects(layout: &Layout, schemas: &[ObjectSchema], seed: u64, max_objects: usize) -> Vec<Object> {
+fn place_objects(world: &mut World, schemas: &[ObjectSchema], seed: u64, max_objects: usize) {
+    use rand::seq::SliceRandom;
+    // list all floor cells
+    let w = world.layout.width;
+    let h = world.layout.height;
+    let cells = &world.layout.cells;
+    let mut floor = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            if cells[y*w + x] >= 0 {
+                floor.push((x,y));
+            }
+        }
+    }
+    // randomize schema order
     let mut rng = StdRng::seed_from_u64(seed);
-    use rand::seq::{SliceRandom, IteratorRandom};
-    let mut objects: Vec<Object> = Vec::new();
+    let mut order: Vec<&ObjectSchema> = schemas.iter().collect();
+    order.shuffle(&mut rng);
     let mut id = 0;
-    // collect all room cells
-    let mut free_cells: Vec<(usize, usize)> = (0..layout.height).flat_map(|y| {
-        (0..layout.width).filter_map(move |x| {
-            let idx = y * layout.width + x;
-            if layout.cells[idx] >= 0 { Some((x, y)) } else { None }
-        })
-    }).collect();
-    free_cells.shuffle(&mut rng);
-    // shuffle placement order of schemas
-    let mut schema_list: Vec<&ObjectSchema> = schemas.iter().collect();
-    schema_list.shuffle(&mut rng);
-    for schema in schema_list.iter() {
+    for schema in order {
         if id >= max_objects { break; }
-        match &schema.constraint {
-            // must go inside specific parent(s)
-            ObjectConstraint::InsideOf(names) => {
-                // find matching parent indices
-                let parent_indices: Vec<usize> = objects.iter().enumerate()
-                    .filter(|(_, o)| names.contains(&o.name) && o.contents.len() < o.capacity)
-                    .map(|(i, _)| i)
-                    .collect();
-                if let Some(&pi) = parent_indices.iter().choose(&mut rng) {
-                    // place child inside parent
-                    let (px, py) = (objects[pi].x, objects[pi].y);
-                    objects[pi].contents.push(id);
-                    objects.push(Object { id,
-                                          name: schema.name,
-                                          capacity: schema.capacity,
-                                          pickable: schema.pickable,
-                                          x: px,
-                                          y: py,
-                                          contents: Vec::new() });
-                    id += 1;
-                }
-            }
-            _ => {
-                // non-InsideOf: determine floor vs parent if pickable
-                let mut placed = false;
-                if schema.pickable {
-                    // try any parent by selecting indices
-                    let parent_indices: Vec<usize> = objects.iter().enumerate()
-                        .filter(|(_, o)| o.contents.len() < o.capacity)
-                        .map(|(i, _)| i)
-                        .collect();
-                    if !parent_indices.is_empty() && rng.gen_bool(0.5) {
-                        if let Some(&pi) = parent_indices.iter().choose(&mut rng) {
-                            let (px, py) = (objects[pi].x, objects[pi].y);
-                            objects[pi].contents.push(id);
-                            objects.push(Object { id,
-                                                  name: schema.name,
-                                                  capacity: schema.capacity,
-                                                  pickable: schema.pickable,
-                                                  x: px,
-                                                  y: py,
-                                                  contents: Vec::new() });
-                            id += 1;
-                            placed = true;
-                        }
-                    }
-                }
-                // if not placed in parent, place on floor under its constraint
-                if !placed {
-                    let candidates: Vec<(usize, usize)> = free_cells.iter().cloned()
-                        .filter(|&(x, y)| schema.constraint.check(layout, x, y))
-                        .collect();
-                    if let Some(&(fx, fy)) = candidates.iter().choose(&mut rng) {
-                        objects.push(Object { id,
-                                              name: schema.name,
-                                              capacity: schema.capacity,
-                                              pickable: schema.pickable,
-                                              x: fx,
-                                              y: fy,
-                                              contents: Vec::new() });
-                        id += 1;
-                    }
+        // first, we check if the schema's target constraints *can* be satisfied
+        // if not, skip this schema
+        let mut target_candidates = Vec::new();
+        for &(x,y) in &floor {
+            if schema.target.check(world, x, y) {
+                // if there is no other object in the cell, add it to candidates
+                if world.objects.iter().all(|o| o.x != x || o.y != y) {
+                    target_candidates.push((x,y));
                 }
             }
         }
-    }
-    // enforce minimum 25% pickable and 25% capacity-bearing items
-    let total = objects.len();
-    let mut needed_pick = ((total as f32) * 0.25).ceil() as usize;
-    let cur_pick = objects.iter().filter(|o| o.pickable).count();
-    if cur_pick < needed_pick {
-        needed_pick -= cur_pick;
-        for _ in 0..needed_pick {
-            // random pickable schema (non-InsideOf)
-            if let Some(schema) = schemas.iter()
-                .filter(|s| s.pickable)
-                .filter(|s| !matches!(s.constraint, ObjectConstraint::InsideOf(_)))
-                .choose(&mut rng)
-            {
-                // floor placement
-                let candidates: Vec<(usize, usize)> = free_cells.iter().cloned()
-                    .filter(|&(x, y)| schema.constraint.check(layout, x, y))
-                    .collect();
-                if let Some(&(x, y)) = candidates.iter().choose(&mut rng) {
-                    objects.push(Object { id,
-                                          name: schema.name,
-                                          capacity: schema.capacity,
-                                          pickable: schema.pickable,
-                                          x, y,
-                                          contents: Vec::new() });
-                    id += 1;
+        for parent in world.objects.iter() {
+            if parent.capacity > 0 && schema.target.check(world, parent.x, parent.y) {
+                target_candidates.push((parent.x, parent.y));
+            }
+        }
+        // if there are no candidates, skip this schema
+        if target_candidates.is_empty() {
+            continue;
+        }
+
+        // gather placements: floor + weighted inside
+        let mut candidates = Vec::new();
+        for &(x,y) in &floor {
+            if schema.constraint.check(world, x, y) {
+                // if there is no other object in the cell, add it to candidates
+                if world.objects.iter().all(|o| o.x != x || o.y != y) {
+                    candidates.push((x,y,false));
                 }
             }
         }
-    }
-    let total = objects.len();
-    let mut needed_cap = ((total as f32) * 0.25).ceil() as usize;
-    let cur_cap = objects.iter().filter(|o| o.capacity > 0).count();
-    if cur_cap < needed_cap {
-        needed_cap -= cur_cap;
-        for _ in 0..needed_cap {
-            // random capacity schema
-            if let Some(schema) = schemas.iter()
-                .filter(|s| s.capacity > 0)
-                .filter(|s| !matches!(s.constraint, ObjectConstraint::InsideOf(_)))
-                .choose(&mut rng)
-            {
-                let candidates: Vec<(usize, usize)> = free_cells.iter().cloned()
-                    .filter(|&(x, y)| schema.constraint.check(layout, x, y))
-                    .collect();
-                if let Some(&(x, y)) = candidates.iter().choose(&mut rng) {
-                    objects.push(Object { id,
-                                          name: schema.name,
-                                          capacity: schema.capacity,
-                                          pickable: schema.pickable,
-                                          x, y,
-                                          contents: Vec::new() });
-                    id += 1;
-                }
+        for parent in world.objects.iter() {
+            if parent.capacity > 0 && schema.constraint.check(world, parent.x, parent.y) && schema.pickable{
+                candidates.push((parent.x, parent.y, true));
             }
         }
+        // fallback to allow placement when no valid domain
+        if candidates.is_empty() {
+            continue;
+        }
+        // if there is both inside and non-inside choose 50/50 between those first and then filter candidates
+        // first, find out if there are both some inside and outside candidates
+        let mut inside = false;
+        let mut outside = false;
+        for &(_, _, is_inside) in &candidates {
+            if is_inside { inside = true; } else { outside = true; }
+        }
+
+        // if both, pick either inside or outside 50/50
+        // if only one, pick that one
+        if inside && outside {
+            let pick_inside = rng.gen_bool(0.5);
+            candidates.retain(|&(_, _, is_inside)| is_inside == pick_inside);
+        } else if inside {
+            candidates.retain(|&(_, _, is_inside)| is_inside);
+        } else if outside {
+            candidates.retain(|&(_, _, is_inside)| !is_inside);
+        }
+
+        if let Some(&(x,y,inside)) = candidates.choose(&mut rng) {
+            if inside {
+                let pi = world.objects.iter().position(|o| o.x==x && o.y==y).unwrap();
+                world.objects[pi].contents.push(id);
+            }
+            let obj = Object { id,
+                              name: schema.name,
+                              capacity: schema.capacity,
+                              pickable: schema.pickable,
+                              description: schema.description,
+                              x,y,
+                              contents: Vec::new() };
+            world.objects.push(obj);
+            id += 1;
+        }
     }
-    objects
 }
 
-/// Generate a new world with dynamic width/height and object placement
 pub fn generate(opts: &GenOpts) -> World {
     let width = opts.width;
     let height = opts.height;
+    let mut rng = StdRng::seed_from_u64(opts.seed);
     let shell = make_concave_shell(width, height, opts.seed);
     let (regions, mut wall_mask) = bsp_with_walls(&shell, opts.max_rooms, opts.seed, width, height);
     let labels = build_labels(&regions, width, height);
@@ -534,7 +495,19 @@ pub fn generate(opts: &GenOpts) -> World {
             cells.push(labels[i]);
         }
     }
-    let layout = Layout::new(width, height, cells);
-    let objects = place_objects(&layout, &ObjectSchema::default_schemas(), opts.seed, opts.max_objects);
-    World { layout, objects }
+    // assign randomized names to each room region
+    let mut pool = ROOM_NAME_POOL.to_vec();
+    pool.shuffle(&mut rng);
+    let region_count = regions.len();
+    let room_names = pool.into_iter().take(region_count).collect();
+    let layout = Layout::new(width, height, cells, room_names);
+    let mut world = World { layout, objects: Vec::new() };
+    place_objects(&mut world, &ObjectSchema::default_schemas(), opts.seed, opts.max_objects);
+    world
 }
+
+/// Pool of possible room names; randomized per world
+pub const ROOM_NAME_POOL: &[&str] = &[
+    "Living Room", "Kitchen", "Bedroom", "Bathroom", "Dining Room",
+    "Study", "Guest Room", "Office", "Hallway", "Playroom",
+];

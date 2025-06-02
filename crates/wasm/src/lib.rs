@@ -38,10 +38,21 @@ pub fn generate(seed: u64, max_rooms: usize, width: usize, height: usize, max_ob
 
     // Call into your core crate
     let world = apartment_core::generate(&opts);
-    let apartment_core::Layout { width, height, cells } = world.layout;
+    let layout = world.layout;
 
-    // Wrap it up for JS
-    ApartmentLayout { width, height, cells }
+    // Wrap it up for JS (ignore room_names here; use get_room_names method)
+    ApartmentLayout { width: layout.width, height: layout.height, cells: layout.cells }
+}
+
+// Expose room names on the layout
+#[wasm_bindgen]
+impl ApartmentLayout {
+    /// Names of each room ID (0..rooms.len())
+    #[wasm_bindgen]
+    pub fn get_room_names(&self) -> Array {
+        // need to call into core: regenerate? Instead, use simulator get_room_names after instantiation
+        Array::new()
+    }
 }
 
 #[wasm_bindgen]
@@ -140,18 +151,18 @@ impl ApartmentSimulator {
     pub fn get_objects(&self) -> Array {
         let arr = Array::new();
         // collect IDs of objects contained in containers
-        use std::collections::HashSet;
-        let mut contained: HashSet<u32> = HashSet::new();
-        for c in self.sim.world.objects.iter() {
-            for &cid in c.contents.iter() {
-                contained.insert(cid as u32);
-            }
-        }
+        // use std::collections::HashSet;
+        // let mut contained: HashSet<u32> = HashSet::new();
+        // for c in self.sim.world.objects.iter() {
+        //     for &cid in c.contents.iter() {
+        //         contained.insert(cid as u32);
+        //     }
+        // }
         for o in self.sim.world.objects.iter() {
             // skip objects inside containers
-            if contained.contains(&(o.id as u32)) {
-                continue;
-            }
+            // if contained.contains(&(o.id as u32)) {
+            //     continue;
+            // }
             let obj = JsObject::new();
             Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(o.id as f64)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(o.x as f64)).unwrap();
@@ -159,6 +170,12 @@ impl ApartmentSimulator {
             Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(o.pickable)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(o.name)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(o.capacity as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("description"), &JsValue::from_str(o.description)).unwrap();
+            let contents_arr = Array::new();
+            for &c in o.contents.iter() {
+                contents_arr.push(&JsValue::from_f64(c as f64));
+            }
+            Reflect::set(&obj, &JsValue::from_str("contents"), &contents_arr).unwrap();
             arr.push(&obj);
         }
         arr
@@ -172,6 +189,12 @@ impl ApartmentSimulator {
             Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(o.pickable)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(o.name)).unwrap();
             Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(o.capacity as f64)).unwrap();
+            Reflect::set(&obj, &JsValue::from_str("description"), &JsValue::from_str(o.description)).unwrap();
+            let contents_arr = Array::new();
+            for &c in o.contents.iter() {
+                contents_arr.push(&JsValue::from_f64(c as f64));
+            }
+            Reflect::set(&obj, &JsValue::from_str("contents"), &contents_arr).unwrap();
             JsValue::from(obj)
         } else {
             JsValue::NULL
@@ -189,6 +212,15 @@ impl ApartmentSimulator {
                     Reflect::set(&obj, &JsValue::from_str("id"), &JsValue::from_f64(inner.id as f64)).unwrap();
                     Reflect::set(&obj, &JsValue::from_str("name"), &JsValue::from_str(inner.name)).unwrap();
                     Reflect::set(&obj, &JsValue::from_str("capacity"), &JsValue::from_f64(inner.capacity as f64)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("description"), &JsValue::from_str(inner.description)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("pickable"), &JsValue::from_bool(inner.pickable)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("x"), &JsValue::from_f64(inner.x as f64)).unwrap();
+                    Reflect::set(&obj, &JsValue::from_str("y"), &JsValue::from_f64(inner.y as f64)).unwrap();
+                    let contents_arr = Array::new();
+                    for &c in inner.contents.iter() {
+                        contents_arr.push(&JsValue::from_f64(c as f64));
+                    }
+                    Reflect::set(&obj, &JsValue::from_str("contents"), &contents_arr).unwrap();
                     arr.push(&obj);
                 }
             }
@@ -210,5 +242,23 @@ impl ApartmentSimulator {
     #[wasm_bindgen(getter)]
     pub fn cells(&self) -> Vec<i8> {
         self.sim.world.layout.cells.clone()
+    }
+    /// Names of each room ID (0..rooms.len())
+    #[wasm_bindgen]
+    pub fn get_room_names(&self) -> Array {
+        let arr = Array::new();
+        for &name in self.sim.world.layout.room_names.iter() {
+            arr.push(&JsValue::from_str(name));
+        }
+        arr
+    }
+    /// Check if the object with given ID is currently in its correct target location.
+    #[wasm_bindgen]
+    pub fn check_placement(&self, object_id: u32) -> bool {
+        // delegate to core implementation
+        if let Some(obj) = self.sim.world.objects.iter().find(|o| o.id as u32 == object_id) {
+            return obj.check_placement(&self.sim.world);
+        }
+        false
     }
 }

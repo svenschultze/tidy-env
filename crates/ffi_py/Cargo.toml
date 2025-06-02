@@ -1,0 +1,15 @@
+[package]
+name = "tidy_env_py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tidy_env_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+tidy_core = { path = "../core", package = "core" }
+
+[build-dependencies]
+pyo3-build-config = "0.20"
