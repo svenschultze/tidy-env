@@ -335,7 +335,7 @@ fn constants(_py: Python, m: &PyModule) -> PyResult<()> {
 
 /// The main Python module
 #[pymodule]
-fn tidy_env_py(_py: Python, m: &PyModule) -> PyResult<()> {
+fn tidyenv(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyGenOpts>()?;
     m.add_class::<PyObject>()?;
     m.add_class::<PyLayout>()?;
